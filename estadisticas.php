@@ -1,197 +1,183 @@
 <?php
 require_once 'includes/auth.php';
 require_once 'includes/db.php';
+require_once 'includes/nav.php';
 
-// Avisos por día (últimos 7 días)
-$avisos_por_dia = $conn->query("
-    SELECT DATE(fecha_envio) as dia, COUNT(*) as total
-    FROM avisos_log
-    WHERE fecha_envio >= DATE_SUB(NOW(), INTERVAL 7 DAY)
-    GROUP BY DATE(fecha_envio)
-    ORDER BY dia ASC
-");
-
-// Socios que más avisos recibieron
-$mas_avisos = $conn->query("
-    SELECT c.nombre, c.plan, c.estado, COUNT(a.id) as total_avisos
-    FROM avisos_log a
-    JOIN clientes c ON a.cliente_id = c.id
-    GROUP BY a.cliente_id
-    ORDER BY total_avisos DESC
-    LIMIT 5
-");
-
-// Total avisos
+$total        = $conn->query("SELECT COUNT(*) as t FROM clientes")->fetch_assoc()['t'];
+$activos      = $conn->query("SELECT COUNT(*) as t FROM clientes WHERE estado='activo'")->fetch_assoc()['t'];
+$vencidos     = $conn->query("SELECT COUNT(*) as t FROM clientes WHERE estado='vencido'")->fetch_assoc()['t'];
+$por_vencer   = $conn->query("SELECT COUNT(*) as t FROM clientes WHERE estado='por_vencer'")->fetch_assoc()['t'];
 $total_avisos = $conn->query("SELECT COUNT(*) as t FROM avisos_log")->fetch_assoc()['t'];
-$avisos_hoy   = $conn->query("SELECT COUNT(*) as t FROM avisos_log WHERE DATE(fecha_envio) = CURDATE()")->fetch_assoc()['t'];
-$avisos_semana= $conn->query("SELECT COUNT(*) as t FROM avisos_log WHERE fecha_envio >= DATE_SUB(NOW(), INTERVAL 7 DAY)")->fetch_assoc()['t'];
+$avisos_hoy   = $conn->query("SELECT COUNT(*) as t FROM avisos_log WHERE DATE(fecha_envio)=CURDATE()")->fetch_assoc()['t'];
+$avisos_sem   = $conn->query("SELECT COUNT(*) as t FROM avisos_log WHERE fecha_envio>=DATE_SUB(NOW(),INTERVAL 7 DAY)")->fetch_assoc()['t'];
 
-// Distribución de planes
-$planes = $conn->query("SELECT plan, COUNT(*) as total FROM clientes GROUP BY plan");
+// Retención
+$retencion = $total > 0 ? round(($activos / $total) * 100) : 0;
 
-// Datos para el gráfico de barras
-$dias_labels = [];
-$dias_data   = [];
-$tmp = $avisos_por_dia;
-while ($r = $tmp->fetch_assoc()) {
-    $dias_labels[] = date('d/m', strtotime($r['dia']));
-    $dias_data[]   = (int)$r['total'];
-}
+// Avisos últimos 7 días para gráfico
+$dias_data = []; $dias_labels = [];
+$tmp = $conn->query("SELECT DATE(fecha_envio) as d, COUNT(*) as t FROM avisos_log WHERE fecha_envio>=DATE_SUB(NOW(),INTERVAL 7 DAY) GROUP BY DATE(fecha_envio) ORDER BY d ASC");
+while ($r = $tmp->fetch_assoc()) { $dias_labels[] = date('d/m', strtotime($r['d'])); $dias_data[] = (int)$r['t']; }
+
+// Distribución planes
+$planes_data = []; $planes_labels = [];
+$tmp2 = $conn->query("SELECT plan, COUNT(*) as t FROM clientes GROUP BY plan");
+while ($r = $tmp2->fetch_assoc()) { $planes_labels[] = ucfirst($r['plan']); $planes_data[] = (int)$r['t']; }
+
+// Top deudores
+$top = $conn->query("SELECT c.nombre, c.plan, c.estado, COUNT(a.id) as tot FROM avisos_log a JOIN clientes c ON a.cliente_id=c.id GROUP BY a.cliente_id ORDER BY tot DESC LIMIT 5");
 ?>
 <!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>GymFlow — Estadísticas</title>
-<style>
-* { margin:0; padding:0; box-sizing:border-box; }
-:root {
-  --bg:#0a0a0a; --card:#141414; --card2:#1a1a1a;
-  --border:#222; --green:#00ff88; --green-s:rgba(0,255,136,.1);
-  --red:#ff3333; --yellow:#ffcc00; --text:#f0f0f0; --muted:#555;
-}
-body { background:var(--bg); color:var(--text); font-family:'Segoe UI',sans-serif; }
-nav { background:var(--card); border-bottom:1px solid var(--border); padding:1rem 2rem; display:flex; align-items:center; justify-content:space-between; }
-.logo { font-size:1.3rem; font-weight:900; letter-spacing:2px; color:var(--green); }
-.logo span { color:var(--text); }
-.nav-links a { color:var(--muted); font-size:.8rem; text-decoration:none; margin-left:1.5rem; text-transform:uppercase; letter-spacing:1px; transition:color .15s; }
-.nav-links a:hover { color:var(--green); }
-main { max-width:1000px; margin:0 auto; padding:2rem; }
-h1 { font-size:1.6rem; font-weight:800; margin-bottom:.25rem; }
-.sub { color:var(--muted); font-size:.85rem; margin-bottom:2rem; }
-
-.stats { display:grid; grid-template-columns:repeat(3,1fr); gap:1rem; margin-bottom:2rem; }
-.stat { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:1.25rem 1.5rem; }
-.stat-num { font-size:2.5rem; font-weight:900; color:var(--green); line-height:1; }
-.stat-label { font-size:.68rem; color:var(--muted); text-transform:uppercase; letter-spacing:1px; margin-top:.25rem; }
-
-.grid-2 { display:grid; grid-template-columns:1fr 1fr; gap:1.5rem; margin-bottom:1.5rem; }
-.panel { background:var(--card); border:1px solid var(--border); border-radius:14px; padding:1.5rem; }
-.panel-title { font-size:.72rem; text-transform:uppercase; letter-spacing:1.5px; color:var(--muted); font-weight:700; margin-bottom:1.25rem; }
-
-/* GRÁFICO DE BARRAS */
-.chart { display:flex; align-items:flex-end; gap:8px; height:120px; margin-bottom:.5rem; }
-.bar-wrap { flex:1; display:flex; flex-direction:column; align-items:center; gap:5px; height:100%; justify-content:flex-end; }
-.bar { width:100%; background:var(--green); border-radius:4px 4px 0 0; min-height:4px; transition:height .5s ease; box-shadow:0 0 8px rgba(0,255,136,.3); }
-.bar-val { font-size:.7rem; color:var(--green); font-weight:700; }
-.bar-label { font-size:.65rem; color:var(--muted); }
-.chart-labels { display:flex; gap:8px; }
-.no-data { color:var(--muted); font-size:.85rem; text-align:center; padding:2rem; }
-
-/* TABLA TOP */
-.top-item { display:flex; align-items:center; gap:.875rem; padding:.75rem 0; border-bottom:1px solid var(--border); }
-.top-item:last-child { border-bottom:none; }
-.top-rank { width:28px; height:28px; border-radius:50%; background:var(--card2); border:1px solid var(--border); display:flex; align-items:center; justify-content:center; font-size:.75rem; font-weight:700; color:var(--muted); flex-shrink:0; }
-.top-rank.gold { background:rgba(255,204,0,.15); border-color:#ffcc00; color:#ffcc00; }
-.top-nombre { font-size:.88rem; font-weight:600; }
-.top-detalle { font-size:.72rem; color:var(--muted); margin-top:2px; }
-.top-count { font-size:1.2rem; font-weight:800; color:var(--red); margin-left:auto; }
-
-/* PLANES */
-.plan-item { margin-bottom:1rem; }
-.plan-label { display:flex; justify-content:space-between; font-size:.8rem; margin-bottom:5px; }
-.plan-bar { height:6px; background:var(--card2); border-radius:3px; overflow:hidden; }
-.plan-fill { height:100%; border-radius:3px; background:var(--green); box-shadow:0 0 6px rgba(0,255,136,.3); }
-
-@media(max-width:700px) { .grid-2 { grid-template-columns:1fr; } .stats { grid-template-columns:1fr 1fr; } }
-</style>
+<title>GymFlow AI — Estadísticas</title>
+<link rel="stylesheet" href="css/premium.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 </head>
 <body>
+<div class="app-layout">
+  <?php navBar('estadisticas'); ?>
 
-<nav>
-  <div class="logo">GYM<span>FLOW</span></div>
-  <div class="nav-links">
-    <a href="automatizacion.php">← Panel</a>
-    <a href="renovar.php">Renovar</a>
-    <a href="exportar.php">📥 Exportar CSV</a>
-    <a href="logout.php">Salir</a>
-  </div>
-</nav>
-
-<main>
-  <h1>📊 Estadísticas</h1>
-  <p class="sub">Historial de actividad del sistema · <?= date('d/m/Y') ?></p>
-
-  <div class="stats">
-    <div class="stat">
-      <div class="stat-num"><?= $total_avisos ?></div>
-      <div class="stat-label">Avisos enviados (total)</div>
+  <div class="main-content">
+    <div class="topbar">
+      <div class="topbar-left">
+        <div class="topbar-title">📈 Estadísticas</div>
+        <div class="topbar-sub">Historial y análisis del sistema · <?= date('d/m/Y') ?></div>
+      </div>
+      <div class="topbar-right">
+        <a href="exportar.php" class="btn btn-outline">📥 Exportar CSV</a>
+      </div>
     </div>
-    <div class="stat">
-      <div class="stat-num"><?= $avisos_semana ?></div>
-      <div class="stat-label">Esta semana</div>
-    </div>
-    <div class="stat">
-      <div class="stat-num"><?= $avisos_hoy ?></div>
-      <div class="stat-label">Hoy</div>
-    </div>
-  </div>
 
-  <div class="grid-2">
-    <!-- GRÁFICO -->
-    <div class="panel">
-      <div class="panel-title">📈 Avisos enviados — últimos 7 días</div>
-      <?php if (empty($dias_data)): ?>
-        <div class="no-data">Todavía no hay avisos registrados.</div>
-      <?php else:
-        $max = max($dias_data) ?: 1;
-      ?>
-      <div class="chart">
-        <?php foreach ($dias_data as $i => $val): ?>
-        <div class="bar-wrap">
-          <div class="bar-val"><?= $val ?></div>
-          <div class="bar" style="height:<?= round(($val/$max)*100) ?>%"></div>
+    <div class="page">
+
+      <!-- STATS -->
+      <div class="stats-grid mb-4">
+        <div class="stat-card green">
+          <div class="stat-icon">📊</div>
+          <div class="stat-num"><?= $total_avisos ?></div>
+          <div class="stat-label">Avisos totales</div>
         </div>
-        <?php endforeach; ?>
-      </div>
-      <div class="chart-labels" style="display:flex;gap:8px;">
-        <?php foreach ($dias_labels as $l): ?>
-          <div style="flex:1;text-align:center;font-size:.65rem;color:var(--muted)"><?= $l ?></div>
-        <?php endforeach; ?>
-      </div>
-      <?php endif; ?>
-    </div>
-
-    <!-- DISTRIBUCIÓN PLANES -->
-    <div class="panel">
-      <div class="panel-title">📦 Distribución de planes</div>
-      <?php
-      $total_s = $conn->query("SELECT COUNT(*) as t FROM clientes")->fetch_assoc()['t'];
-      $planes->data_seek(0);
-      while ($p = $planes->fetch_assoc()):
-        $pct = $total_s > 0 ? round(($p['total']/$total_s)*100) : 0;
-      ?>
-      <div class="plan-item">
-        <div class="plan-label">
-          <span><?= ucfirst($p['plan']) ?></span>
-          <span style="color:var(--green)"><?= $p['total'] ?> socios (<?= $pct ?>%)</span>
+        <div class="stat-card purple">
+          <div class="stat-icon">📤</div>
+          <div class="stat-num"><?= $avisos_sem ?></div>
+          <div class="stat-label">Esta semana</div>
         </div>
-        <div class="plan-bar"><div class="plan-fill" style="width:<?= $pct ?>%"></div></div>
+        <div class="stat-card yellow">
+          <div class="stat-icon">📅</div>
+          <div class="stat-num"><?= $avisos_hoy ?></div>
+          <div class="stat-label">Hoy</div>
+        </div>
+        <div class="stat-card <?= $retencion >= 70 ? 'green' : ($retencion >= 50 ? 'yellow' : 'red') ?>">
+          <div class="stat-icon">💎</div>
+          <div class="stat-num"><?= $retencion ?>%</div>
+          <div class="stat-label">Retención</div>
+        </div>
       </div>
-      <?php endwhile; ?>
+
+      <div class="grid-2 mb-3">
+
+        <!-- GRÁFICO AVISOS -->
+        <div class="card">
+          <div class="card-title">📈 Avisos últimos 7 días</div>
+          <?php if (empty($dias_data)): ?>
+            <div style="text-align:center;padding:3rem;color:var(--muted);font-size:.82rem">Sin datos todavía</div>
+          <?php else: ?>
+            <canvas id="chartAvisos" height="180"></canvas>
+          <?php endif; ?>
+        </div>
+
+        <!-- GRÁFICO PLANES -->
+        <div class="card">
+          <div class="card-title">📦 Distribución de planes</div>
+          <?php if (empty($planes_data)): ?>
+            <div style="text-align:center;padding:3rem;color:var(--muted);font-size:.82rem">Sin datos</div>
+          <?php else: ?>
+            <canvas id="chartPlanes" height="180"></canvas>
+          <?php endif; ?>
+        </div>
+      </div>
+
+      <!-- ESTADO GENERAL -->
+      <div class="card mb-3">
+        <div class="card-title">🏋️ Estado general del gym</div>
+        <div style="margin-bottom:1rem">
+          <div style="display:flex;justify-content:space-between;font-size:.78rem;margin-bottom:.4rem">
+            <span>Al día</span><span style="color:var(--primary);font-weight:700"><?= $activos ?> socios (<?= $total>0?round($activos/$total*100):0 ?>%)</span>
+          </div>
+          <div class="prog-bar mb-2"><div class="prog-fill green" style="width:<?= $total>0?round($activos/$total*100):0 ?>%"></div></div>
+        </div>
+        <div style="margin-bottom:1rem">
+          <div style="display:flex;justify-content:space-between;font-size:.78rem;margin-bottom:.4rem">
+            <span>Por vencer</span><span style="color:var(--yellow);font-weight:700"><?= $por_vencer ?> socios (<?= $total>0?round($por_vencer/$total*100):0 ?>%)</span>
+          </div>
+          <div class="prog-bar mb-2"><div class="prog-fill yellow" style="width:<?= $total>0?round($por_vencer/$total*100):0 ?>%"></div></div>
+        </div>
+        <div>
+          <div style="display:flex;justify-content:space-between;font-size:.78rem;margin-bottom:.4rem">
+            <span>Vencidos</span><span style="color:var(--red);font-weight:700"><?= $vencidos ?> socios (<?= $total>0?round($vencidos/$total*100):0 ?>%)</span>
+          </div>
+          <div class="prog-bar"><div class="prog-fill red" style="width:<?= $total>0?round($vencidos/$total*100):0 ?>%"></div></div>
+        </div>
+      </div>
+
+      <!-- TOP DEUDORES -->
+      <div class="card">
+        <div class="card-title">🔴 Socios con más avisos recibidos</div>
+        <?php if ($top->num_rows === 0): ?>
+          <div style="text-align:center;padding:2rem;color:var(--muted);font-size:.82rem">Sin datos todavía.</div>
+        <?php else:
+          $pos = 1; while ($r = $top->fetch_assoc()): ?>
+          <div style="display:flex;align-items:center;gap:.875rem;padding:.75rem 0;border-bottom:1px solid var(--border)">
+            <div style="width:30px;height:30px;border-radius:50%;background:<?= $pos===1?'rgba(245,158,11,.15)':'var(--surface2)' ?>;border:1px solid <?= $pos===1?'var(--yellow)':'var(--border)' ?>;display:flex;align-items:center;justify-content:center;font-size:.75rem;font-weight:700;color:<?= $pos===1?'var(--yellow)':'var(--muted)' ?>;flex-shrink:0"><?= $pos ?></div>
+            <div style="flex:1">
+              <div style="font-size:.88rem;font-weight:600;color:var(--text)"><?= htmlspecialchars($r['nombre']) ?></div>
+              <div style="font-size:.72rem;color:var(--muted)"><?= ucfirst($r['plan']) ?> · <?= ucfirst($r['estado']) ?></div>
+            </div>
+            <div style="font-size:1.3rem;font-weight:800;color:var(--red)"><?= $r['tot'] ?></div>
+            <div style="font-size:.65rem;color:var(--muted)">avisos</div>
+          </div>
+          <?php $pos++; endwhile; endif; ?>
+      </div>
+
     </div>
   </div>
+</div>
 
-  <!-- TOP SOCIOS CON MÁS AVISOS -->
-  <div class="panel">
-    <div class="panel-title">🔴 Socios con más avisos recibidos</div>
-    <?php if ($mas_avisos->num_rows === 0): ?>
-      <div class="no-data">Sin datos todavía.</div>
-    <?php else:
-      $pos = 1;
-      while ($r = $mas_avisos->fetch_assoc()): ?>
-      <div class="top-item">
-        <div class="top-rank <?= $pos === 1 ? 'gold' : '' ?>"><?= $pos ?></div>
-        <div style="flex:1">
-          <div class="top-nombre"><?= htmlspecialchars($r['nombre']) ?></div>
-          <div class="top-detalle">Plan <?= ucfirst($r['plan']) ?> · Estado: <?= ucfirst($r['estado']) ?></div>
-        </div>
-        <div class="top-count"><?= $r['total_avisos'] ?> avisos</div>
-      </div>
-      <?php $pos++; endwhile; ?>
-    <?php endif; ?>
-  </div>
-</main>
+<script>
+const chartOpts = {
+  responsive:true,
+  plugins:{ legend:{ display:false }, tooltip:{ backgroundColor:'#0d0d18', titleColor:'#e8e8f2', bodyColor:'#a0a0c0', borderColor:'#1e1e32', borderWidth:1 } },
+  scales:{
+    x:{ grid:{ color:'#1e1e32' }, ticks:{ color:'#52527a', font:{ size:11 } } },
+    y:{ grid:{ color:'#1e1e32' }, ticks:{ color:'#52527a', font:{ size:11 } }, beginAtZero:true }
+  }
+};
+<?php if (!empty($dias_data)): ?>
+new Chart(document.getElementById('chartAvisos'), {
+  type:'bar',
+  data:{
+    labels: <?= json_encode($dias_labels) ?>,
+    datasets:[{ data: <?= json_encode($dias_data) ?>, backgroundColor:'rgba(0,200,150,.25)', borderColor:'#00c896', borderWidth:2, borderRadius:6 }]
+  },
+  options: chartOpts
+});
+<?php endif; ?>
+<?php if (!empty($planes_data)): ?>
+new Chart(document.getElementById('chartPlanes'), {
+  type:'doughnut',
+  data:{
+    labels: <?= json_encode($planes_labels) ?>,
+    datasets:[{ data: <?= json_encode($planes_data) ?>, backgroundColor:['rgba(0,200,150,.7)','rgba(124,111,205,.7)','rgba(245,158,11,.7)'], borderColor:'#0d0d18', borderWidth:3 }]
+  },
+  options:{
+    responsive:true, cutout:'65%',
+    plugins:{ legend:{ position:'bottom', labels:{ color:'#a0a0c0', font:{size:12}, padding:16 } }, tooltip:{ backgroundColor:'#0d0d18', titleColor:'#e8e8f2', bodyColor:'#a0a0c0', borderColor:'#1e1e32', borderWidth:1 } }
+  }
+});
+<?php endif; ?>
+</script>
 </body>
 </html>

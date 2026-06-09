@@ -17,47 +17,55 @@ $por_vencer = $conn->affected_rows;
 $conn->query("UPDATE clientes SET estado='activo'     WHERE fecha_vencimiento > '$limite_aviso' AND estado != 'activo'");
 $activos    = $conn->affected_rows;
 
-// Si lo llaman por fetch (desde automatizacion.php) devuelve JSON
+// ── ANTI-SPAM: detectar quiénes necesitan aviso sin haber recibido uno en 4 días ──
+$para_avisar = $conn->query("
+    SELECT id, nombre, telefono, plan, estado, fecha_vencimiento,
+           ultimo_aviso, aviso_conteo,
+           DATEDIFF('$hoy', ultimo_aviso) as dias_desde_aviso
+    FROM clientes
+    WHERE estado IN ('vencido','por_vencer')
+    AND (ultimo_aviso IS NULL OR DATEDIFF('$hoy', ultimo_aviso) >= 4)
+")->num_rows;
+
+// Devolver JSON si lo llama automatizacion.php
 if (!empty($_SERVER['HTTP_X_REQUESTED_WITH']) || isset($_GET['ajax'])) {
     header('Content-Type: application/json');
     echo json_encode([
-        'vencidos'   => $vencidos,
-        'por_vencer' => $por_vencer,
-        'activos'    => $activos,
-        'fecha'      => $hoy
+        'vencidos'    => $vencidos,
+        'por_vencer'  => $por_vencer,
+        'activos'     => $activos,
+        'para_avisar' => $para_avisar,
+        'fecha'       => $hoy,
+        'ok'          => true
     ]);
     exit;
 }
-
-// Si lo abren directo en el navegador, muestra resultado visual
 ?>
 <!DOCTYPE html>
 <html lang="es">
 <head>
 <meta charset="UTF-8">
 <title>GymFlow — Automatización ejecutada</title>
+<link rel="stylesheet" href="css/premium.css">
 <style>
-* { margin:0; padding:0; box-sizing:border-box; }
-body { background:#0a0a0a; color:#f0f0f0; font-family:'Segoe UI',sans-serif; display:flex; align-items:center; justify-content:center; min-height:100vh; }
-.box { background:#141414; border:1px solid #222; border-radius:16px; padding:2.5rem; max-width:420px; width:90%; text-align:center; }
-h2 { font-size:1.4rem; font-weight:800; margin-bottom:1.5rem; color:#00ff88; }
-.item { display:flex; align-items:center; gap:.75rem; background:#1a1a1a; border-radius:10px; padding:1rem; margin-bottom:.75rem; }
-.item-num { font-size:1.8rem; font-weight:900; width:50px; text-align:center; }
-.item-label { font-size:.85rem; color:#888; }
-.red { color:#ff3333; } .yellow { color:#ffcc00; } .green { color:#00ff88; }
-.fecha { font-size:.78rem; color:#555; margin-top:1rem; }
-.btn { display:block; margin-top:1.5rem; background:#00ff88; color:#000; font-weight:800; padding:.875rem; border-radius:10px; text-decoration:none; font-size:.9rem; }
-.btn:hover { opacity:.85; }
+body { display:flex; align-items:center; justify-content:center; min-height:100vh; }
+.box { background:var(--surface); border:1px solid var(--border); border-radius:16px; padding:2.5rem; max-width:440px; width:90%; position:relative; overflow:hidden; }
+.box::before { content:''; position:absolute; top:0; left:0; right:0; height:2px; background:linear-gradient(90deg,var(--primary),var(--accent)); }
+.box h2 { font-size:1.3rem; font-weight:800; margin-bottom:1.5rem; color:var(--primary); }
+.row { display:flex; align-items:center; gap:1rem; background:var(--surface2); border-radius:10px; padding:1rem 1.25rem; margin-bottom:.75rem; border:1px solid var(--border); }
+.row-num { font-size:2rem; font-weight:900; width:50px; text-align:center; line-height:1; }
+.row-label { font-size:.82rem; color:var(--text2); }
 </style>
 </head>
 <body>
 <div class="box">
   <h2>⚡ Automatización ejecutada</h2>
-  <div class="item"><span class="item-num red"><?= $vencidos ?></span><div><div class="item-label">🔴 Vencidos actualizados</div></div></div>
-  <div class="item"><span class="item-num yellow"><?= $por_vencer ?></span><div><div class="item-label">🟡 Por vencer actualizados</div></div></div>
-  <div class="item"><span class="item-num green"><?= $activos ?></span><div><div class="item-label">🟢 Activos confirmados</div></div></div>
-  <div class="fecha">📅 Fecha analizada: <?= date('d/m/Y') ?></div>
-  <a href="automatizacion.php" class="btn">← Volver al panel</a>
+  <div class="row"><span class="row-num" style="color:var(--red)"><?= $vencidos ?></span><div class="row-label">🔴 Vencidos actualizados</div></div>
+  <div class="row"><span class="row-num" style="color:var(--yellow)"><?= $por_vencer ?></span><div class="row-label">🟡 Por vencer actualizados</div></div>
+  <div class="row"><span class="row-num" style="color:var(--primary)"><?= $activos ?></span><div class="row-label">🟢 Activos confirmados</div></div>
+  <div class="row"><span class="row-num" style="color:var(--accent)"><?= $para_avisar ?></span><div class="row-label">📲 Socios listos para recibir aviso (sin spam)</div></div>
+  <p style="font-size:.75rem;color:var(--muted);margin-top:1rem">📅 <?= date('d/m/Y H:i') ?> · Anti-spam activo — solo avisa si pasaron 4+ días desde el último mensaje</p>
+  <a href="automatizacion.php" class="btn btn-primary btn-full" style="margin-top:1.25rem">← Volver al panel</a>
 </div>
 </body>
 </html>

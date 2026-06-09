@@ -1,22 +1,30 @@
 <?php
 require_once 'includes/auth.php';
 require_once 'includes/db.php';
+require_once 'includes/nav.php';
 
 $total      = $conn->query("SELECT COUNT(*) as t FROM clientes")->fetch_assoc()['t'];
 $activos    = $conn->query("SELECT COUNT(*) as t FROM clientes WHERE estado='activo'")->fetch_assoc()['t'];
 $por_vencer = $conn->query("SELECT COUNT(*) as t FROM clientes WHERE estado='por_vencer'")->fetch_assoc()['t'];
 $vencidos   = $conn->query("SELECT COUNT(*) as t FROM clientes WHERE estado='vencido'")->fetch_assoc()['t'];
+$pendientes_count = $vencidos + $por_vencer;
 
-$historial  = $conn->query("
-    SELECT a.*, c.nombre, c.plan
-    FROM avisos_log a
+// Última ejecución
+$ultima = $conn->query("SELECT MAX(fecha_envio) as t FROM avisos_log")->fetch_assoc()['t'];
+$ultima_txt = $ultima ? date('d/m/Y H:i', strtotime($ultima)) : 'Nunca ejecutado';
+
+// Historial
+$historial = $conn->query("
+    SELECT a.*, c.nombre, c.plan FROM avisos_log a
     JOIN clientes c ON a.cliente_id = c.id
-    ORDER BY a.fecha_envio DESC LIMIT 10
+    ORDER BY a.fecha_envio DESC LIMIT 8
 ");
+
+// Pendientes
 $pendientes = $conn->query("
-    SELECT * FROM clientes
-    WHERE estado IN ('vencido','por_vencer')
-    ORDER BY estado DESC
+    SELECT *, DATEDIFF(CURDATE(), fecha_vencimiento) as dias_diff
+    FROM clientes WHERE estado IN ('vencido','por_vencer')
+    ORDER BY dias_diff DESC
 ");
 ?>
 <!DOCTYPE html>
@@ -24,251 +32,220 @@ $pendientes = $conn->query("
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>GymFlow — Panel de Automatización</title>
-<style>
-* { margin:0; padding:0; box-sizing:border-box; }
-:root {
-  --bg:#0a0a0a; --card:#141414; --card2:#1a1a1a;
-  --border:#222; --border2:#2a2a2a;
-  --green:#00ff88; --green-s:rgba(0,255,136,.1);
-  --red:#ff3333;   --red-s:rgba(255,51,51,.1);
-  --yellow:#ffcc00;--yellow-s:rgba(255,204,0,.1);
-  --text:#f0f0f0;  --muted:#555;
-}
-body { background:var(--bg); color:var(--text); font-family:'Segoe UI',sans-serif; }
-nav { background:var(--card); border-bottom:1px solid var(--border); padding:1rem 2rem; display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:.75rem; }
-.logo { font-size:1.4rem; font-weight:900; letter-spacing:2px; color:var(--green); }
-.logo span { color:var(--text); }
-.nav-links { display:flex; gap:1.5rem; flex-wrap:wrap; }
-.nav-links a { color:var(--muted); font-size:.8rem; text-decoration:none; text-transform:uppercase; letter-spacing:1px; transition:color .15s; }
-.nav-links a:hover, .nav-links a.active { color:var(--green); }
-.nav-right { display:flex; align-items:center; gap:1rem; }
-.nav-right a { color:var(--muted); font-size:.78rem; text-decoration:none; transition:color .15s; }
-.nav-right a:hover { color:var(--red); }
-main { max-width:1100px; margin:0 auto; padding:2rem; }
-.page-title { font-size:1.6rem; font-weight:800; margin-bottom:.25rem; }
-.page-sub { color:var(--muted); font-size:.85rem; margin-bottom:2rem; }
-.stats { display:grid; grid-template-columns:repeat(4,1fr); gap:1rem; margin-bottom:2rem; }
-.stat { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:1.25rem 1.5rem; position:relative; overflow:hidden; }
-.stat::after { content:''; position:absolute; top:0; left:0; right:0; height:3px; border-radius:12px 12px 0 0; }
-.stat.g::after { background:var(--green); } .stat.r::after { background:var(--red); }
-.stat.y::after { background:var(--yellow); } .stat.w::after { background:#555; }
-.stat-num { font-size:2.8rem; font-weight:900; line-height:1; }
-.stat.g .stat-num { color:var(--green); } .stat.r .stat-num { color:var(--red); }
-.stat.y .stat-num { color:var(--yellow); } .stat.w .stat-num { color:var(--text); }
-.stat-label { font-size:.65rem; color:var(--muted); text-transform:uppercase; letter-spacing:1px; margin-top:.3rem; }
-.grid-2 { display:grid; grid-template-columns:1.4fr 1fr; gap:1.5rem; margin-bottom:1.5rem; }
-.panel { background:var(--card); border:1px solid var(--border); border-radius:14px; padding:1.5rem; }
-.panel-title { font-size:.72rem; text-transform:uppercase; letter-spacing:1.5px; color:var(--muted); margin-bottom:1.25rem; font-weight:700; display:flex; align-items:center; gap:.5rem; }
-.panel-title .dot { width:7px; height:7px; border-radius:50%; background:var(--green); animation:blink 2s infinite; flex-shrink:0; }
-@keyframes blink { 0%,100%{opacity:1}50%{opacity:.2} }
-.btn-main { width:100%; background:var(--green); color:#000; font-weight:800; font-size:1rem; border:none; padding:1.1rem; border-radius:10px; cursor:pointer; letter-spacing:.5px; margin-bottom:1rem; display:flex; align-items:center; justify-content:center; gap:10px; transition:all .2s; box-shadow:0 0 25px rgba(0,255,136,.25); }
-.btn-main:hover { transform:translateY(-2px); box-shadow:0 0 40px rgba(0,255,136,.4); }
-.btn-main:disabled { opacity:.5; cursor:not-allowed; transform:none; }
-.btns-row { display:grid; grid-template-columns:1fr 1fr; gap:.6rem; margin-top:.75rem; }
-.btn-outline { display:flex; align-items:center; justify-content:center; gap:6px; background:transparent; border:1px solid var(--border2); color:var(--muted); font-weight:600; font-size:.8rem; padding:.75rem; border-radius:8px; text-decoration:none; transition:all .15s; cursor:pointer; }
-.btn-outline:hover { border-color:var(--green); color:var(--green); }
-.btn-outline.wa { border-color:rgba(37,211,102,.4); color:#25D366; }
-.btn-outline.wa:hover { background:rgba(37,211,102,.08); }
-.pendiente-item { display:flex; align-items:center; justify-content:space-between; padding:.875rem; background:var(--card2); border-radius:10px; margin-bottom:.6rem; border:1px solid var(--border); }
-.pendiente-item.vencido   { border-left:3px solid var(--red); }
-.pendiente-item.por_vencer { border-left:3px solid var(--yellow); }
-.p-nombre { font-weight:600; font-size:.88rem; }
-.p-detalle { font-size:.7rem; color:var(--muted); margin-top:2px; }
-.badge { display:inline-block; padding:2px 9px; border-radius:20px; font-size:.62rem; font-weight:700; }
-.badge.vencido   { background:var(--red-s);    color:var(--red); }
-.badge.por_vencer { background:var(--yellow-s); color:var(--yellow); }
-.wa-link { background:rgba(37,211,102,.1); border:1px solid rgba(37,211,102,.3); color:#25D366; padding:5px 12px; border-radius:6px; font-size:.72rem; font-weight:700; text-decoration:none; white-space:nowrap; }
-.wa-link:hover { background:rgba(37,211,102,.2); }
-.empty-msg { text-align:center; padding:2rem; color:var(--muted); font-size:.85rem; }
-.historial-item { display:flex; align-items:center; gap:.875rem; padding:.75rem 0; border-bottom:1px solid var(--border); }
-.historial-item:last-child { border-bottom:none; }
-.h-icon { width:32px; height:32px; border-radius:50%; display:flex; align-items:center; justify-content:center; font-size:.85rem; flex-shrink:0; }
-.h-icon.vencido   { background:var(--red-s); }
-.h-icon.por_vencer { background:var(--yellow-s); }
-.h-nombre { font-size:.85rem; font-weight:600; }
-.h-fecha  { font-size:.7rem; color:var(--muted); }
-.prog-wrap { background:var(--card2); border-radius:4px; height:5px; margin-top:.75rem; overflow:hidden; }
-.prog-fill { height:100%; border-radius:4px; background:var(--green); transition:width .6s ease; box-shadow:0 0 8px rgba(0,255,136,.4); }
-.log-box { background:#080808; border:1px solid var(--border); border-radius:8px; padding:1rem; font-family:'Courier New',monospace; font-size:.75rem; height:150px; overflow-y:auto; line-height:1.9; margin-top:.75rem; }
-.log-ok   { color:var(--green); } .log-bad  { color:var(--red); }
-.log-warn { color:var(--yellow); } .log-info { color:var(--muted); }
-/* Resumen texto */
-.resumen-box { background:#080808; border:1px solid var(--border); border-left:3px solid var(--green); border-radius:8px; padding:1rem 1.25rem; font-size:.8rem; line-height:1.8; color:#ccc; white-space:pre-line; display:none; margin-top:.75rem; }
-.btn-copiar { background:var(--card2); border:1px solid var(--border); color:var(--muted); font-size:.72rem; font-weight:600; padding:5px 12px; border-radius:6px; cursor:pointer; transition:all .15s; }
-.btn-copiar:hover { border-color:var(--green); color:var(--green); }
-@media(max-width:768px) { .stats { grid-template-columns:repeat(2,1fr); } .grid-2 { grid-template-columns:1fr; } }
-</style>
+<title>GymFlow AI — Automatización</title>
+<link rel="stylesheet" href="css/premium.css">
 </head>
 <body>
+<div class="app-layout">
+  <?php navBar('automatizacion'); ?>
 
-<nav>
-  <div class="logo">GYM<span>FLOW</span></div>
-  <div class="nav-links">
-    <a href="index.php">Dashboard</a>
-    <a href="clientes.php">Socios</a>
-    <a href="registro.php">Agregar</a>
-    <a href="automatizacion.php" class="active">Automatización</a>
-    <a href="avisos.php">Avisos</a>
-    <a href="renovar.php">Renovar</a>
-    <a href="estadisticas.php">Estadísticas</a>
-  </div>
-  <div class="nav-right">
-    <a href="exportar.php">📥 CSV</a>
-    <a href="logout.php">🚪 Salir</a>
-  </div>
-</nav>
-
-<main>
-  <div class="page-title">⚡ Panel de Automatización</div>
-  <p class="page-sub">El sistema detecta y actualiza todo automáticamente · <?= date('d/m/Y H:i') ?></p>
-
-  <div class="stats">
-    <div class="stat w"><div class="stat-num"><?= $total ?></div><div class="stat-label">Total socios</div></div>
-    <div class="stat g"><div class="stat-num"><?= $activos ?></div><div class="stat-label">Al día</div></div>
-    <div class="stat y"><div class="stat-num"><?= $por_vencer ?></div><div class="stat-label">Por vencer</div></div>
-    <div class="stat r"><div class="stat-num"><?= $vencidos ?></div><div class="stat-label">Vencidos</div></div>
-  </div>
-
-  <div class="grid-2">
-    <div>
-      <div class="panel" style="margin-bottom:1.5rem">
-        <div class="panel-title"><span class="dot"></span>Sistema de automatización</div>
-        <button class="btn-main" id="btnMain" onclick="ejecutarAutomatizacion()">
-          <span id="btn-icon">⚡</span>
-          <span id="btn-text">EJECUTAR AUTOMATIZACIÓN</span>
-        </button>
-        <div class="log-box" id="logBox">
-          <div class="log-info">// Sistema listo. Presioná el botón para analizar membresías...</div>
-        </div>
-        <div class="prog-wrap"><div class="prog-fill" id="progFill" style="width:0%"></div></div>
-        <div class="btns-row">
-          <a href="avisos.php" class="btn-outline wa">📲 Ver avisos WhatsApp</a>
-          <a href="renovar.php" class="btn-outline">🔄 Renovar membresías</a>
-          <a href="estadisticas.php" class="btn-outline">📊 Estadísticas</a>
-          <a href="exportar.php" class="btn-outline">📥 Exportar CSV</a>
-        </div>
-        <!-- Resumen copiable -->
-        <div style="display:flex;align-items:center;justify-content:space-between;margin-top:1.25rem;">
-          <span style="font-size:.7rem;color:var(--muted);text-transform:uppercase;letter-spacing:1px">Resumen del día</span>
-          <button class="btn-copiar" onclick="copiarResumen()">📋 Copiar</button>
-        </div>
-        <div class="resumen-box" id="resumenBox"></div>
+  <div class="main-content">
+    <div class="topbar">
+      <div class="topbar-left">
+        <div class="topbar-title">⚡ Panel de Automatización</div>
+        <div class="topbar-sub">Última ejecución: <?= $ultima_txt ?></div>
+      </div>
+      <div class="topbar-right">
+        <a href="resumen_whatsapp.php" class="btn btn-outline">💬 Resumen WA</a>
+        <a href="exportar.php" class="btn btn-outline">📥 CSV</a>
+        <span class="topbar-badge">LIVE</span>
       </div>
     </div>
 
-    <div>
-      <div class="panel">
-        <div class="panel-title"><span class="dot"></span>Pendientes hoy (<?= $vencidos + $por_vencer ?>)</div>
-        <?php if (($vencidos + $por_vencer) === 0): ?>
-          <div class="empty-msg">✅ Todo al día</div>
-        <?php else: ?>
-          <?php while ($s = $pendientes->fetch_assoc()):
-            $primer_nombre = explode(' ', $s['nombre'])[0];
-            if ($s['estado'] === 'vencido') {
-                $msg = "Hola {$primer_nombre} 👋 Tu membresía está vencida. Comunicate con nosotros para renovarla. ¡Gracias! 💪";
-            } else {
-                $msg = "Hola {$primer_nombre} 👋 Tu membresía vence pronto. ¡Renovála para seguir entrenando! 💪";
-            }
-            $link = "https://wa.me/{$s['telefono']}?text=" . urlencode($msg);
-            $hoy_d = new DateTime(); $vence_d = new DateTime($s['fecha_vencimiento']);
-            $dias  = (int)$hoy_d->diff($vence_d)->days;
-            $dias_txt = $s['estado']==='vencido' ? "hace {$dias}d" : "en {$dias}d";
-          ?>
-          <div class="pendiente-item <?= $s['estado'] ?>">
-            <div>
-              <div class="p-nombre"><?= htmlspecialchars($s['nombre']) ?></div>
-              <div class="p-detalle">
-                <?= ucfirst($s['plan']) ?> · <?= $dias_txt ?>
-                <span class="badge <?= $s['estado'] ?>"><?= $s['estado']==='vencido'?'Vencido':'Por vencer' ?></span>
-              </div>
+    <div class="page">
+
+      <!-- STATS -->
+      <div class="stats-grid mb-4">
+        <div class="stat-card white">
+          <div class="stat-icon">👥</div>
+          <div class="stat-num"><?= $total ?></div>
+          <div class="stat-label">Total socios</div>
+        </div>
+        <div class="stat-card green">
+          <div class="stat-icon">✅</div>
+          <div class="stat-num"><?= $activos ?></div>
+          <div class="stat-label">Al día</div>
+        </div>
+        <div class="stat-card yellow">
+          <div class="stat-icon">⏰</div>
+          <div class="stat-num"><?= $por_vencer ?></div>
+          <div class="stat-label">Por vencer</div>
+        </div>
+        <div class="stat-card red">
+          <div class="stat-icon">🔴</div>
+          <div class="stat-num"><?= $vencidos ?></div>
+          <div class="stat-label">Vencidos</div>
+        </div>
+      </div>
+
+      <div class="grid-2-wide mb-3">
+
+        <!-- PANEL IZQUIERDO -->
+        <div style="display:flex;flex-direction:column;gap:1.25rem">
+
+          <!-- BOTÓN AUTOMATIZACIÓN -->
+          <div class="card">
+            <div class="card-title"><span class="live"></span>Motor de automatización</div>
+            <button class="btn btn-primary btn-full btn-lg mb-2" id="btnAuto" onclick="ejecutar()">
+              <span id="btn-icon">⚡</span>
+              <span id="btn-txt">EJECUTAR AUTOMATIZACIÓN</span>
+            </button>
+            <div class="log-box mb-2" id="logBox">
+              <div class="log-info">// Sistema listo · <?= date('d/m/Y H:i') ?></div>
+              <div class="log-info">// Presioná el botón para analizar membresías...</div>
             </div>
-            <a href="<?= $link ?>" target="_blank" class="wa-link">📲</a>
+            <div class="prog-bar mb-3"><div class="prog-fill green" id="progFill" style="width:0%"></div></div>
+
+            <!-- RESUMEN COPIABLE -->
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:.5rem">
+              <span class="text-xs text-muted" style="text-transform:uppercase;letter-spacing:1px">Resumen del día</span>
+              <button class="btn btn-ghost" style="font-size:.72rem;padding:.35rem .75rem" onclick="copiar()">📋 Copiar</button>
+            </div>
+            <div id="resumenBox" style="background:#030308;border:1px solid var(--border);border-left:2px solid var(--primary);border-radius:8px;padding:.875rem 1rem;font-family:monospace;font-size:.75rem;line-height:1.9;color:var(--text2);white-space:pre-line;display:none;min-height:60px"></div>
           </div>
-          <?php endwhile; ?>
+
+          <!-- ACCESOS RÁPIDOS -->
+          <div class="card">
+            <div class="card-title">Accesos rápidos</div>
+            <div class="grid-2" style="gap:.6rem">
+              <a href="avisos.php"          class="btn btn-wa">📲 Ver avisos WhatsApp</a>
+              <a href="renovar.php"         class="btn btn-outline">🔄 Renovar membresías</a>
+              <a href="estadisticas.php"    class="btn btn-outline">📈 Estadísticas</a>
+              <a href="configuracion.php"   class="btn btn-outline">⚙️ Configuración</a>
+            </div>
+          </div>
+        </div>
+
+        <!-- PANEL DERECHO — PENDIENTES -->
+        <div class="card" style="overflow-y:auto;max-height:600px">
+          <div class="card-title"><span class="live"></span>Pendientes hoy (<?= $pendientes_count ?>)</div>
+          <?php if ($pendientes_count === 0): ?>
+            <div style="text-align:center;padding:2rem;color:var(--muted)">
+              <div style="font-size:2rem;margin-bottom:.75rem">✅</div>
+              <div style="font-size:.85rem">Todo al día</div>
+            </div>
+          <?php else: ?>
+            <?php while ($s = $pendientes->fetch_assoc()):
+              $fn  = explode(' ', $s['nombre'])[0];
+              $dias = (int)$s['dias_diff'];
+              if ($s['estado'] === 'vencido') {
+                  $dias_txt = $dias === 0 ? 'Venció hoy' : "Hace {$dias}d";
+                  $msg = "Hola {$fn} 👋 Tu membresía está vencida. Comunicate con nosotros para renovarla. ¡Gracias! 💪";
+              } else {
+                  $dias_rest = abs($dias);
+                  $dias_txt = "Vence en {$dias_rest}d";
+                  $msg = "Hola {$fn} 👋 Tu membresía vence pronto. ¡Renovála para seguir entrenando! 💪";
+              }
+              $link = "https://wa.me/{$s['telefono']}?text=" . urlencode($msg);
+            ?>
+            <div style="display:flex;align-items:center;gap:.875rem;padding:.875rem;background:var(--surface2);border-radius:10px;margin-bottom:.6rem;border:1px solid var(--border);border-left:2px solid <?= $s['estado']==='vencido' ? 'var(--red)' : 'var(--yellow)' ?>">
+              <div style="flex:1">
+                <div style="font-weight:600;font-size:.88rem;margin-bottom:2px"><?= htmlspecialchars($s['nombre']) ?></div>
+                <div style="font-size:.72rem;color:var(--muted)"><?= ucfirst($s['plan']) ?> · <?= $dias_txt ?></div>
+              </div>
+              <span class="badge <?= $s['estado']==='vencido' ? 'badge-red' : 'badge-yellow' ?>">
+                <span class="badge-dot"></span>
+                <?= $dias_txt ?>
+              </span>
+              <a href="<?= $link ?>" target="_blank" class="btn btn-wa" style="padding:.4rem .75rem;font-size:.72rem">📲</a>
+            </div>
+            <?php endwhile; ?>
+          <?php endif; ?>
+        </div>
+      </div>
+
+      <!-- HISTORIAL -->
+      <div class="card">
+        <div class="card-title">📋 Últimos avisos registrados</div>
+        <?php if ($historial->num_rows === 0): ?>
+          <div style="text-align:center;padding:1.5rem;color:var(--muted);font-size:.82rem">Sin registros todavía. Los avisos aparecen acá cuando usás el botón de WhatsApp.</div>
+        <?php else: ?>
+          <table>
+            <thead><tr>
+              <th>Socio</th><th>Plan</th><th>Tipo</th><th>Fecha</th>
+            </tr></thead>
+            <tbody>
+            <?php while ($h = $historial->fetch_assoc()): ?>
+            <tr>
+              <td style="font-weight:600;color:var(--text)"><?= htmlspecialchars($h['nombre']) ?></td>
+              <td><?= ucfirst($h['plan']) ?></td>
+              <td>
+                <span class="badge <?= $h['tipo_aviso']==='vencido' ? 'badge-red' : 'badge-yellow' ?>">
+                  <span class="badge-dot"></span>
+                  <?= $h['tipo_aviso']==='vencido' ? 'Vencido' : 'Por vencer' ?>
+                </span>
+              </td>
+              <td><?= date('d/m/Y H:i', strtotime($h['fecha_envio'])) ?></td>
+            </tr>
+            <?php endwhile; ?>
+            </tbody>
+          </table>
         <?php endif; ?>
       </div>
-    </div>
-  </div>
 
-  <div class="panel">
-    <div class="panel-title">📋 Últimos avisos enviados</div>
-    <?php if ($historial->num_rows === 0): ?>
-      <div class="empty-msg">Todavía no se enviaron avisos. Usá el botón 📲 en la sección de avisos.</div>
-    <?php else: ?>
-      <?php while ($h = $historial->fetch_assoc()): ?>
-      <div class="historial-item">
-        <div class="h-icon <?= $h['tipo_aviso'] ?>"><?= $h['tipo_aviso']==='vencido'?'🔴':'🟡' ?></div>
-        <div style="flex:1">
-          <div class="h-nombre"><?= htmlspecialchars($h['nombre']) ?></div>
-          <div class="h-fecha"><?= ucfirst($h['plan']) ?> · <?= date('d/m/Y H:i', strtotime($h['fecha_envio'])) ?></div>
-        </div>
-        <span class="badge <?= $h['tipo_aviso'] ?>"><?= $h['tipo_aviso']==='vencido'?'Vencido':'Por vencer' ?></span>
-      </div>
-      <?php endwhile; ?>
-    <?php endif; ?>
-  </div>
-</main>
+    </div><!-- /page -->
+  </div><!-- /main-content -->
+</div><!-- /app-layout -->
 
 <script>
-function log(text, cls, delay) {
+function log(t, cls, delay) {
   return new Promise(r => setTimeout(() => {
-    const box = document.getElementById('logBox');
-    const line = document.createElement('div');
-    line.className = cls; line.textContent = text;
-    box.appendChild(line); box.scrollTop = 9999; r();
+    const b = document.getElementById('logBox');
+    const l = document.createElement('div');
+    l.className = cls; l.textContent = t;
+    b.appendChild(l); b.scrollTop = 9999; r();
   }, delay));
 }
-
-async function ejecutarAutomatizacion() {
-  const btn  = document.getElementById('btnMain');
+async function ejecutar() {
+  const btn = document.getElementById('btnAuto');
   const icon = document.getElementById('btn-icon');
-  const txt  = document.getElementById('btn-text');
+  const txt  = document.getElementById('btn-txt');
   const prog = document.getElementById('progFill');
-  btn.disabled = true; icon.textContent = '⏳'; txt.textContent = 'Analizando membresías...';
-  document.getElementById('logBox').innerHTML = ''; prog.style.width = '0%';
+  btn.disabled = true; icon.textContent = '⏳'; txt.textContent = 'Analizando...';
+  document.getElementById('logBox').innerHTML = '';
+  prog.style.width = '0%';
 
-  await log('> Conectando con base de datos...', 'log-info', 300);
-  prog.style.width = '20%';
-  await log('✓ Conexión exitosa', 'log-ok', 800);
-  await log('> Analizando fechas de vencimiento...', 'log-info', 1200);
-  prog.style.width = '45%';
-  await log('> Comparando con fecha de hoy: <?= date('d/m/Y') ?>', 'log-info', 1700);
+  await log('> Iniciando GymFlow AI...', 'log-info', 200);
+  await log('> Conectando base de datos...', 'log-info', 500);
+  prog.style.width = '15%';
+  await log('✓ Conexión establecida', 'log-ok', 1000);
+  await log(`> Fecha de análisis: <?= date('d/m/Y') ?>`, 'log-info', 1300);
+  prog.style.width = '35%';
 
   const resp = await fetch('cron_estados.php?ajax=1');
   const data = await resp.json();
+  prog.style.width = '65%';
 
-  prog.style.width = '75%';
-  await log('✓ Estados actualizados en base de datos', 'log-ok', 2200);
+  await log('✓ Fechas analizadas correctamente', 'log-ok', 1800);
+  if (data.vencidos   > 0) await log(`⚠ ${data.vencidos} socios con membresía vencida`, 'log-bad', 2200);
+  if (data.por_vencer > 0) await log(`~ ${data.por_vencer} socios próximos a vencer`, 'log-warn', 2600);
+  if (data.activos    > 0) await log(`✓ ${data.activos} socios activos confirmados`, 'log-ok', 3000);
   prog.style.width = '90%';
-  if (data.vencidos  > 0) await log(`⚠ ${data.vencidos} socios con membresía vencida`, 'log-bad', 2600);
-  if (data.por_vencer > 0) await log(`~ ${data.por_vencer} socios próximos a vencer`, 'log-warn', 3000);
-  if (data.activos   > 0) await log(`✓ ${data.activos} activos confirmados`, 'log-ok', 3400);
+  await log('> Preparando sistema de avisos...', 'log-info', 3400);
   prog.style.width = '100%';
   await log('✅ AUTOMATIZACIÓN COMPLETADA', 'log-ok', 3800);
 
-  // Generar resumen copiable
-  const hoy = new Date().toLocaleDateString('es-AR');
-  let resumen = `📋 Resumen GymFlow — ${hoy}\n\n`;
-  if (data.vencidos > 0)   resumen += `🔴 Vencidos: ${data.vencidos} socios\n`;
-  if (data.por_vencer > 0) resumen += `🟡 Por vencer: ${data.por_vencer} socios\n`;
-  resumen += `🟢 Al día: <?= $activos ?> socios\n`;
-  resumen += `\n👥 Total: <?= $total ?> socios registrados`;
-  const box = document.getElementById('resumenBox');
-  box.textContent = resumen; box.style.display = 'block';
+  const d = new Date().toLocaleDateString('es-AR');
+  let r = `📋 Resumen GymFlow — ${d}\n\n`;
+  if (data.vencidos > 0)   r += `🔴 Vencidos:    ${data.vencidos} socios\n`;
+  if (data.por_vencer > 0) r += `🟡 Por vencer:  ${data.por_vencer} socios\n`;
+  r += `🟢 Al día:      <?= $activos ?> socios\n`;
+  r += `\n👥 Total: <?= $total ?> socios registrados`;
+  const rb = document.getElementById('resumenBox');
+  rb.textContent = r; rb.style.display = 'block';
 
   setTimeout(() => {
     btn.disabled = false; icon.textContent = '⚡'; txt.textContent = 'VOLVER A EJECUTAR';
     location.reload();
   }, 4500);
 }
-
-function copiarResumen() {
-  const box = document.getElementById('resumenBox');
-  if (!box.textContent.trim()) { alert('Primero ejecutá la automatización.'); return; }
-  navigator.clipboard.writeText(box.textContent).then(() => {
-    const btn = document.querySelector('.btn-copiar');
-    btn.textContent = '✅ Copiado'; setTimeout(() => btn.textContent = '📋 Copiar', 2000);
+function copiar() {
+  const r = document.getElementById('resumenBox').textContent;
+  if (!r.trim()) { alert('Primero ejecutá la automatización.'); return; }
+  navigator.clipboard.writeText(r).then(() => {
+    const b = document.querySelector('[onclick="copiar()"]');
+    b.textContent = '✅ Copiado!';
+    setTimeout(() => b.textContent = '📋 Copiar', 2000);
   });
 }
 </script>
