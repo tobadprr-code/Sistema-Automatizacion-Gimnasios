@@ -1,5 +1,3 @@
-# 🏋️ GymFlow AI
-
 **Sistema Inteligente de Gestión para Gimnasios**
 
 Sistema web completo diseñado para automatizar la administración de gimnasios: socios, membresías, pagos, vencimientos y comunicaciones por WhatsApp.
